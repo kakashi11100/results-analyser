@@ -11,6 +11,10 @@ from sqlalchemy import engine_from_config, pool
 from app.core.config import get_settings
 from app.core.database import Base
 
+
+import app.models  # noqa: F401, E402  — registers every model on Base.metadata
+
+
 # Import every model module so their tables register on Base.metadata.
 # Add new lines here as modules are added in later phases.
 from app.modules.auth import models as _auth_models  # noqa: F401
