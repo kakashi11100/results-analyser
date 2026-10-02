@@ -214,3 +214,43 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# ---------------------------------------------------------------------------
+# Phase 3: auth users (idempotent)
+# ---------------------------------------------------------------------------
+def _seed_auth_users(db) -> None:
+    """Create admin + principal from settings. Idempotent. Refuses default
+    passwords in prod."""
+    from app.core.config import get_settings
+    from app.core.security import hash_password
+    from app.modules.auth.models import User, UserRole
+
+    settings = get_settings()
+
+    _DEFAULTS = {"change-me-admin", "change-me-principal"}
+    if settings.ENVIRONMENT == "prod":
+        for pw in (settings.ADMIN_PASSWORD, settings.PRINCIPAL_PASSWORD):
+            if pw in _DEFAULTS:
+                raise SystemExit(
+                    "Refusing to seed in prod: ADMIN_PASSWORD or "
+                    "PRINCIPAL_PASSWORD is still a default placeholder."
+                )
+
+    pairs = [
+        (settings.ADMIN_USERNAME,     settings.ADMIN_EMAIL,
+         settings.ADMIN_PASSWORD,     UserRole.ADMIN),
+        (settings.PRINCIPAL_USERNAME, settings.PRINCIPAL_EMAIL,
+         settings.PRINCIPAL_PASSWORD, UserRole.PRINCIPAL),
+    ]
+    for uname, email, pw, role in pairs:
+        u = db.query(User).filter_by(username=uname).first()
+        if u is not None:
+            print(f"user exists, skipping: {uname}")
+            continue
+        db.add(User(
+            username=uname, email=email,
+            hashed_password=hash_password(pw),
+            role=role, is_active=True,
+        ))
+        print(f"user created: {uname} ({role.value})")
+    db.commit()

@@ -27,6 +27,29 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, gt=0)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, gt=0)
 
+    # --- Auth / Phase 3: password policy ---
+    PASSWORD_MIN_LENGTH: int = 8
+
+    # --- Auth / Phase 3: per-account lockout ---
+    MAX_LOGIN_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_MINUTES: int = 15
+
+    # --- Auth / Phase 3: per-IP login rate limit ---
+    LOGIN_RATE_LIMIT_ATTEMPTS: int = 5
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
+    # --- Auth / Phase 3: cleanup retention ---
+    REFRESH_TOKEN_RETENTION_DAYS: int = 30
+
+    # --- Auth / Phase 3: seed users ---
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = "change-me-admin"
+    ADMIN_EMAIL: str = "admin@example.com"
+
+    PRINCIPAL_USERNAME: str = "principal"
+    PRINCIPAL_PASSWORD: str = "change-me-principal"
+    PRINCIPAL_EMAIL: str = "principal@example.com"
+
     # --- HTTP / CORS ---
     # NoDecode stops pydantic-settings from trying json.loads() on the raw
     # env string; the validator below does the comma-splitting instead.

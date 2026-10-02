@@ -1,40 +1,91 @@
-# auth/schemas
-"""Pydantic v2 schemas for the User model."""
+"""Pydantic v2 request/response schemas for the auth module."""
+
+from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.auth.models import UserRole
 
 
-class UserBase(BaseModel):
-    username: str = Field(..., min_length=3, max_length=64)
-    email: EmailStr
-    role: UserRole = UserRole.ADMIN
-    is_active: bool = True
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
 
 
-class UserCreate(UserBase):
-    password: str = Field(..., min_length=8, max_length=128)
+class UserSummary(BaseModel):
+    """Trimmed user shape returned inside LoginResponse."""
 
-
-class UserUpdate(BaseModel):
-    # All optional — used for partial updates.
-    email: EmailStr | None = None
-    role: UserRole | None = None
-    is_active: bool | None = None
-    password: str | None = Field(default=None, min_length=8, max_length=128)
-
-
-class UserRead(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    created_at: datetime
-    updated_at: datetime
-    deleted_at: datetime | None = None
+    username: str
+    role: UserRole
 
 
-__all__ = ["UserBase", "UserCreate", "UserRead", "UserUpdate"]
+class LoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+    user: UserSummary
+
+
+# ---------------------------------------------------------------------------
+# Refresh
+# ---------------------------------------------------------------------------
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=1, max_length=4096)
+
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+
+
+# ---------------------------------------------------------------------------
+# Logout
+# ---------------------------------------------------------------------------
+class LogoutRequest(BaseModel):
+    refresh_token: str = Field(min_length=1, max_length=4096)
+
+
+# ---------------------------------------------------------------------------
+# Me
+# ---------------------------------------------------------------------------
+class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    username: str
+    email: str
+    role: UserRole
+
+
+# ---------------------------------------------------------------------------
+# Change password
+# ---------------------------------------------------------------------------
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    # Length policy (settings.PASSWORD_MIN_LENGTH) is enforced in the service
+    # so the error carries our standard code and a useful message.
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+__all__ = [
+    "LoginRequest",
+    "LoginResponse",
+    "UserSummary",
+    "RefreshRequest",
+    "RefreshResponse",
+    "LogoutRequest",
+    "UserRead",
+    "ChangePasswordRequest",
+]

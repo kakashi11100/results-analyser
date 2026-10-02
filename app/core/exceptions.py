@@ -46,31 +46,31 @@ class BaseAPIError(Exception):
 
 
 class NotFoundError(BaseAPIError):
-    code = "not_found"
+    code = "NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "Resource not found."
 
 
 class DuplicateError(BaseAPIError):
-    code = "duplicate"
+    code = "DUPLICATE"
     http_status = status.HTTP_409_CONFLICT
     message = "Resource already exists."
 
 
 class ValidationFailedError(BaseAPIError):
-    code = "validation_failed"
+    code = "VALIDATION_FAILED"
     http_status = HTTP_422
     message = "Validation failed."
 
 
 class PermissionDeniedError(BaseAPIError):
-    code = "permission_denied"
+    code = "PERMISSION_DENIED"
     http_status = status.HTTP_403_FORBIDDEN
     message = "Permission denied."
 
 
 class ConflictError(BaseAPIError):
-    code = "conflict"
+    code = "CONFLICT"
     http_status = status.HTTP_409_CONFLICT
     message = "Conflict with current state."
 
@@ -78,7 +78,7 @@ class ConflictError(BaseAPIError):
 class ParseError(BaseAPIError):
     """Raised when a PDF/CSV parser hits a malformed row. Phase 4+ uses this."""
 
-    code = "parse_error"
+    code = "PARSE_ERROR"
     http_status = HTTP_422
     message = "Failed to parse document."
 
@@ -101,6 +101,38 @@ class ParseError(BaseAPIError):
         if self.row is not None:
             payload["row"] = self.row
         return [payload] if payload else []
+    
+
+class UnauthorizedError(BaseAPIError):
+    code = "UNAUTHORIZED"
+    http_status = status.HTTP_401_UNAUTHORIZED
+    message = "Unauthorized."
+
+    # 401s must carry the WWW-Authenticate header per RFC 7235.
+    headers = {"WWW-Authenticate": "Bearer"}
+
+
+class AccountLockedError(BaseAPIError):
+    code = "ACCOUNT_LOCKED"
+    http_status = 423
+    message = "Account is locked."
+
+
+class TooManyRequestsError(BaseAPIError):
+    code = "RATE_LIMITED"
+    http_status = status.HTTP_429_TOO_MANY_REQUESTS
+    message = "Too many requests."
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        details: list[Any] | None = None,
+        code: str | None = None,
+        retry_after: int | None = None,
+    ) -> None:
+        super().__init__(message, details=details, code=code)
+        self.retry_after = retry_after
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +154,7 @@ def _envelope(
     details: list[Any] | None,
     request_id: str,
     http_status: int,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=http_status,
@@ -133,6 +166,7 @@ def _envelope(
                 "request_id": request_id,
             }
         },
+        headers=headers,
     )
 
 
@@ -143,6 +177,15 @@ async def api_error_handler(request: Request, exc: BaseAPIError) -> JSONResponse
     details = exc.details
     if isinstance(exc, ParseError) and details is None:
         details = exc.to_details()
+
+    # Start empty; collect any headers the exception class wants to attach
+    # (e.g. WWW-Authenticate on 401), plus Retry-After when present.
+    headers: dict[str, str] = {}
+    headers.update(getattr(exc, "headers", {}) or {})
+
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
 
     logger.warning(
         "api_error",
@@ -158,6 +201,7 @@ async def api_error_handler(request: Request, exc: BaseAPIError) -> JSONResponse
         details=details,
         request_id=_request_id(request),
         http_status=exc.http_status,
+        headers=headers or None,
     )
 
 
@@ -165,14 +209,14 @@ async def http_exception_handler(
     request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
     code = {
-        400: "bad_request",
-        401: "unauthorized",
-        403: "permission_denied",
-        404: "not_found",
-        405: "method_not_allowed",
-        409: "conflict",
-        422: "validation_failed",
-    }.get(exc.status_code, "http_error")
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "PERMISSION_DENIED",
+        404: "NOT_FOUND",
+        405: "METHOD_NOT_ALLOWED",
+        409: "CONFLICT",
+        422: "VALIDATION_FAILED",
+    }.get(exc.status_code, "HTTP_ERROR")
 
     return _envelope(
         code=code,
@@ -197,7 +241,7 @@ async def validation_exception_handler(
         )
 
     return _envelope(
-        code="validation_failed",
+        code="VALIDATION_FAILED",
         message="Request validation failed.",
         details=details,
         request_id=_request_id(request),
@@ -210,7 +254,7 @@ async def unhandled_exception_handler(
 ) -> JSONResponse:
     logger.exception("unhandled_exception", extra={"path": request.url.path})
     return _envelope(
-        code="internal_error",
+        code="INTERNAL_ERROR",
         message="An unexpected error occurred.",
         details=None,
         request_id=_request_id(request),
@@ -234,4 +278,7 @@ __all__ = [
     "ConflictError",
     "ParseError",
     "register_exception_handlers",
+    "UnauthorizedError",
+    "AccountLockedError",
+    "TooManyRequestsError",
 ]
