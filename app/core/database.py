@@ -24,14 +24,56 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
+is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+engine_kwargs: dict = {"future": True}
+if is_sqlite:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    engine_kwargs.update(
+        {
+            "pool_pre_ping": True,
+            "pool_size": 5,
+            "max_overflow": 10,
+            "pool_recycle": 1800,
+        }
+    )
+
 engine = create_engine(
     settings.DATABASE_URL,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
-    pool_recycle=1800,
-    future=True,
+    **engine_kwargs,
 )
+
+if is_sqlite:
+    from datetime import datetime, timezone
+    from sqlalchemy import event
+    import sqlalchemy as sa
+    from sqlalchemy.dialects.sqlite.base import DATETIME
+
+    class SQLiteDateTimeUTC(DATETIME):
+        def result_processor(self, dialect, coltype):
+            super_proc = super().result_processor(dialect, coltype)
+
+            def process(value):
+                res = super_proc(value) if super_proc else value
+                if isinstance(res, datetime) and res.tzinfo is None:
+                    return res.replace(tzinfo=timezone.utc)
+                return res
+
+            return process
+
+    engine.dialect.colspecs[sa.DateTime] = SQLiteDateTimeUTC
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+        try:
+            dbapi_connection.create_function(
+                "now", 0, lambda: datetime.now(timezone.utc).isoformat()
+            )
+        except Exception:
+            pass
 
 SessionLocal = sessionmaker(
     bind=engine,

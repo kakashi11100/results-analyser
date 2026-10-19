@@ -17,7 +17,23 @@ import app.models  # noqa: F401, E402  — registers every model on Base.metadat
 
 # Import every model module so their tables register on Base.metadata.
 # Add new lines here as modules are added in later phases.
-from app.modules.auth import models as _auth_models  # noqa: F401
+from alembic.operations import Operations
+
+_orig_create_fk = Operations.create_foreign_key
+
+
+def _sqlite_safe_create_fk(self, constraint_name, source_table, referent_table, local_cols, remote_cols, **kw):
+    bind = self.get_bind()
+    if bind and bind.dialect.name == "sqlite":
+        with self.batch_alter_table(source_table) as batch_op:
+            batch_op.create_foreign_key(
+                constraint_name, referent_table, local_cols, remote_cols, **kw
+            )
+    else:
+        _orig_create_fk(self, constraint_name, source_table, referent_table, local_cols, remote_cols, **kw)
+
+
+Operations.create_foreign_key = _sqlite_safe_create_fk
 
 config = context.config
 
@@ -56,6 +72,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
+            render_as_batch=True,
         )
         with context.begin_transaction():
             context.run_migrations()

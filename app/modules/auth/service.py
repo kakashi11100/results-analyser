@@ -79,10 +79,16 @@ class AuthService:
 
         # Locked account: reject with 423 before touching the password so a
         # correct password cannot bypass the lockout.
-        if user.locked_until is not None and user.locked_until > now:
-            raise AccountLockedError(
-                "Account is locked due to too many failed login attempts."
-            )
+        if user.locked_until is not None:
+            locked_until = user.locked_until
+            if locked_until.tzinfo is None:
+                locked_until = locked_until.replace(tzinfo=timezone.utc)
+            if locked_until > now:
+                raise AccountLockedError(
+                    "Account is locked due to too many failed login attempts."
+                )
+            user.locked_until = None
+            user.failed_login_count = 0
 
         if not verify_password(password, user.hashed_password):
             self._register_failed_attempt(user)
@@ -144,6 +150,7 @@ class AuthService:
     ) -> RefreshResult:
         settings = get_settings()
 
+        now = datetime.now(timezone.utc)
         # 1. Decode and confirm type=refresh (rejects access-as-refresh).
         payload = decode_token(refresh_token, expected_type="refresh")
         jti = str(payload.get("jti", ""))
@@ -152,8 +159,10 @@ class AuthService:
         except (KeyError, ValueError, TypeError):
             raise UnauthorizedError(_INVALID_REFRESH)
 
-        # 2. Look up the stored hash.
-        stored = self.tokens.get_by_hash(hash_refresh_token(refresh_token))
+        # 2. Look up the stored hash with row lock.
+        stored = self.tokens.get_by_hash(
+            hash_refresh_token(refresh_token), for_update=True
+        )
         if stored is None or stored.jti != jti:
             raise UnauthorizedError(_INVALID_REFRESH)
 
@@ -166,9 +175,19 @@ class AuthService:
             self.db.commit()
             raise UnauthorizedError(_INVALID_REFRESH)
 
-        # 4. Reuse detection: a revoked token being presented again means
-        # the family has leaked — revoke everything for the user.
+        # 4. Reuse detection: a revoked token being presented again.
+        # Allow short grace window for concurrent requests with replaced_by_id.
         if stored.revoked_at is not None:
+            revoked_at = stored.revoked_at
+            if revoked_at.tzinfo is None:
+                revoked_at = revoked_at.replace(tzinfo=timezone.utc)
+            grace_seconds = getattr(settings, "REFRESH_REUSE_GRACE_SECONDS", 10)
+            if (
+                stored.replaced_by_id is not None
+                and (now - revoked_at).total_seconds() <= grace_seconds
+            ):
+                raise UnauthorizedError(_INVALID_REFRESH)
+
             logger.warning(
                 "refresh_token_reuse_detected",
                 extra={"user_id": str(user.id)},
@@ -178,7 +197,10 @@ class AuthService:
             raise UnauthorizedError(_INVALID_REFRESH)
 
         # 5. Expired tokens (never rotated).
-        if stored.expires_at <= datetime.now(timezone.utc):
+        expires_at = stored.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= now:
             self.tokens.revoke(stored)
             self.db.commit()
             raise UnauthorizedError(_INVALID_REFRESH)
@@ -198,7 +220,9 @@ class AuthService:
                 ip=ip,
             )
         )
-        self.tokens.revoke(stored, replaced_by_id=new_row.id)
+        if not self.tokens.revoke(stored, replaced_by_id=new_row.id):
+            self.db.rollback()
+            raise UnauthorizedError(_INVALID_REFRESH)
         self.db.commit()
 
         return RefreshResult(

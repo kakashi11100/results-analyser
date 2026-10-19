@@ -32,9 +32,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def dummy_verify() -> None:
     """Run a bcrypt verify against a fixed dummy hash (timing equalization)."""
-    global _DUMMY_HASH
-    if _DUMMY_HASH is None:
-        _DUMMY_HASH = pwd_context.hash("this-is-not-a-real-password")
     pwd_context.verify("this-is-not-a-real-password", _DUMMY_HASH)
 
 

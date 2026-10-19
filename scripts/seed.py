@@ -203,22 +203,7 @@ def seed_academics() -> None:
         db.close()
 
 
-# --------------------------------------------------------------------------- #
-# Entrypoint
-# --------------------------------------------------------------------------- #
-def main() -> None:
-    configure_logging()
-    seed_admin()
-    seed_academics()
-
-
-if __name__ == "__main__":
-    main()
-
-# ---------------------------------------------------------------------------
-# Phase 3: auth users (idempotent)
-# ---------------------------------------------------------------------------
-def _seed_auth_users(db) -> None:
+def _seed_auth_users(db: Session) -> None:
     """Create admin + principal from settings. Idempotent. Refuses default
     passwords in prod."""
     from app.core.config import get_settings
@@ -237,20 +222,38 @@ def _seed_auth_users(db) -> None:
                 )
 
     pairs = [
-        (settings.ADMIN_USERNAME,     settings.ADMIN_EMAIL,
-         settings.ADMIN_PASSWORD,     UserRole.ADMIN),
+        (settings.ADMIN_USERNAME, settings.ADMIN_EMAIL,
+         settings.ADMIN_PASSWORD, UserRole.ADMIN),
         (settings.PRINCIPAL_USERNAME, settings.PRINCIPAL_EMAIL,
          settings.PRINCIPAL_PASSWORD, UserRole.PRINCIPAL),
     ]
     for uname, email, pw, role in pairs:
-        u = db.query(User).filter_by(username=uname).first()
+        u = db.execute(select(User).where(User.username == uname)).scalar_one_or_none()
         if u is not None:
-            print(f"user exists, skipping: {uname}")
+            logger.info("user exists, skipping", extra={"username": uname})
             continue
         db.add(User(
             username=uname, email=email,
             hashed_password=hash_password(pw),
             role=role, is_active=True,
         ))
-        print(f"user created: {uname} ({role.value})")
+        db.flush()
+        logger.info("user created", extra={"username": uname, "role": role.value})
     db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Entrypoint
+# --------------------------------------------------------------------------- #
+def main() -> None:
+    configure_logging()
+    db = SessionLocal()
+    try:
+        _seed_auth_users(db)
+    finally:
+        db.close()
+    seed_academics()
+
+
+if __name__ == "__main__":
+    main()

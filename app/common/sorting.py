@@ -1,19 +1,45 @@
-"""Generic sort-param parsing."""
+"""Sort validation for the admin CRUD framework.
+
+Accepts a comma-separated list like ``-created_at,name``. Any field not
+declared as sortable on the resource raises ``ValidationFailedError``.
+"""
 
 from __future__ import annotations
 
-from typing import Literal
+from sqlalchemy import ColumnElement
 
-from pydantic import BaseModel
-
-
-class SortParams(BaseModel):
-    sort_by: str = "created_at"
-    order: Literal["asc", "desc"] = "desc"
-
-    def as_sqlalchemy(self, model: object) -> object:
-        column = getattr(model, self.sort_by)
-        return column.asc() if self.order == "asc" else column.desc()
+from app.core.exceptions import ValidationFailedError
 
 
-__all__ = ["SortParams"]
+def parse_sort(
+    raw: str | None,
+    allowed: dict[str, ColumnElement],
+    default: str,
+) -> list:
+    """Turn a sort token into a list of ORDER BY expressions."""
+    token = (raw or default or "").strip()
+    if not token:
+        return []
+
+    exprs: list = []
+    for part in token.split(","):
+        part = part.strip()
+        if not part:
+            continue
+
+        descending = part.startswith("-")
+        name = part.lstrip("+-").strip()
+
+        if name not in allowed:
+            raise ValidationFailedError(
+                f"Unknown sort field: {name}",
+                details=[{"field": name, "allowed": sorted(allowed.keys())}],
+            )
+
+        column = allowed[name]
+        exprs.append(column.desc() if descending else column.asc())
+
+    return exprs
+
+
+__all__ = ["parse_sort"]

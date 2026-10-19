@@ -39,21 +39,38 @@ class RefreshTokenRepository:
         self.db.flush()  # populate token.id for replaced_by_id
         return token
 
-    def get_by_hash(self, token_hash: str) -> RefreshToken | None:
+    def get_by_hash(
+        self, token_hash: str, *, for_update: bool = False
+    ) -> RefreshToken | None:
         stmt = select(RefreshToken).where(
             RefreshToken.token_hash == token_hash,
             RefreshToken.deleted_at.is_(None),
         )
+        if for_update and self.db.bind and self.db.bind.dialect.name != "sqlite":
+            stmt = stmt.with_for_update()
         return self.db.execute(stmt).scalar_one_or_none()
 
     def revoke(
         self, token: RefreshToken, *, replaced_by_id: uuid.UUID | None = None
-    ) -> None:
+    ) -> bool:
         if token.revoked_at is not None:
-            return
-        token.revoked_at = datetime.now(timezone.utc)
+            return False
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(RefreshToken)
+            .where(
+                RefreshToken.id == token.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=now, replaced_by_id=replaced_by_id)
+        )
+        res = self.db.execute(stmt)
+        if res.rowcount == 0:
+            return False
+        token.revoked_at = now
         token.replaced_by_id = replaced_by_id
         self.db.flush()
+        return True
 
     def revoke_all_for_user(self, user_id: uuid.UUID) -> None:
         """Revoke every non-revoked refresh token owned by the user."""

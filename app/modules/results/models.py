@@ -83,6 +83,11 @@ class ResultStatus(str, enum.Enum):
 class ChangeType(str, enum.Enum):
     REVALUATION = "revaluation"
     SUPPLY = "supply"
+    MANUAL_EDIT = "manual_edit"
+
+
+# Alias for backward-compat and admin resource imports.
+ResultChangeType = ChangeType
 
 
 # Small helpers to keep the SAEnum definitions DRY and lowercase-consistent.
@@ -303,6 +308,6 @@ class GradeCard(TimestampMixin, Base):
 __all__ = [
     "ExamSession", "ExamType",
     "SemesterResult", "ResultStatus", "Grade",
-    "ResultHistory", "ChangeType",
+    "ResultHistory", "ChangeType", "ResultChangeType",
     "GradeCard",
 ]

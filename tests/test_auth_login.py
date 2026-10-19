@@ -92,6 +92,26 @@ def test_lock_expires_and_login_works_again(client, db, admin_user, no_rate_limi
     assert r.status_code == 200, r.text
 
 
+def test_lock_expires_and_single_bad_password_does_not_relock(client, db, admin_user, no_rate_limit):
+    for _ in range(5):
+        client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "bad"},
+        )
+
+    admin_user.locked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.add(admin_user)
+    db.commit()
+
+    # Next single bad password should return 401 UNAUTHORIZED, NOT 423 ACCOUNT_LOCKED
+    r = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "bad"},
+    )
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "UNAUTHORIZED"
+
+
 def test_rate_limit_returns_429_on_sixth_attempt(client, admin_user):
     codes = []
     for _ in range(6):

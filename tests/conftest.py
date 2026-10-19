@@ -30,7 +30,45 @@ assert "test" in TEST_DB_URL.lower(), (
     f"TEST_DATABASE_URL must point at a *_test database, got {TEST_DB_URL!r}"
 )
 
-engine = create_engine(TEST_DB_URL, future=True)
+is_sqlite = TEST_DB_URL.startswith("sqlite")
+engine_kwargs: dict = {"future": True}
+if is_sqlite:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(TEST_DB_URL, **engine_kwargs)
+
+if is_sqlite:
+    from datetime import datetime, timezone
+    from sqlalchemy import event
+    import sqlalchemy as sa
+    from sqlalchemy.dialects.sqlite.base import DATETIME
+
+    class SQLiteDateTimeUTC(DATETIME):
+        def result_processor(self, dialect, coltype):
+            super_proc = super().result_processor(dialect, coltype)
+
+            def process(value):
+                res = super_proc(value) if super_proc else value
+                if isinstance(res, datetime) and res.tzinfo is None:
+                    return res.replace(tzinfo=timezone.utc)
+                return res
+
+            return process
+
+    engine.dialect.colspecs[sa.DateTime] = SQLiteDateTimeUTC
+
+    @event.listens_for(engine, "connect")
+    def _set_test_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+        try:
+            dbapi_connection.create_function(
+                "now", 0, lambda: datetime.now(timezone.utc).isoformat()
+            )
+        except Exception:
+            pass
+
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -41,17 +79,31 @@ def _create_schema() -> Iterator[None]:
     Uses create_all() so tests don't depend on Alembic state. If you'd rather
     run Alembic here, swap the body for `alembic upgrade head` via subprocess.
     """
+    # Always rebuild from the current models so stale test DB files
+    # (left over from a previous session) never cause schema mismatch errors
+    # when columns are added.  Safe: we only ever touch the _test database.
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
+    # Dispose *all* pooled connections before dropping tables.
+    # Without this, TestClient's lifespan event may keep a connection open
+    # and SQLite raises "database table is locked" during drop_all.
+    engine.dispose()
     Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture(autouse=True)
 def _clean_tables() -> Iterator[None]:
-    """Truncate every table between tests so tests are independent."""
+    """Truncate or delete every table between tests so tests are independent."""
     with engine.begin() as conn:
-        # Order matters only if FKs are enforced; TRUNCATE ... CASCADE is safe.
-        conn.execute(text("TRUNCATE TABLE refresh_tokens, users RESTART IDENTITY CASCADE"))
+        if engine.dialect.name == "sqlite":
+            conn.execute(text("PRAGMA foreign_keys = OFF;"))
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(table.delete())
+            conn.execute(text("PRAGMA foreign_keys = ON;"))
+        else:
+            # Order matters only if FKs are enforced; TRUNCATE ... CASCADE is safe.
+            conn.execute(text("TRUNCATE TABLE refresh_tokens, users RESTART IDENTITY CASCADE"))
     # Reset the in-memory rate limiter so tests don't leak buckets into each other.
     limiter = get_rate_limiter()
     reset = getattr(limiter, "reset", None)

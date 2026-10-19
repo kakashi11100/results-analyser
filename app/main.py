@@ -15,6 +15,8 @@ from app.core.database import get_db
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
+from app.core.audit_middleware import AuditContextMiddleware
+
 
 from app.modules.admin.router import router as admin_router
 from app.modules.auth.router import router as auth_router
@@ -52,6 +54,8 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
 )
 app.add_middleware(RequestIDMiddleware)
+
+app.add_middleware(AuditContextMiddleware)
 
 register_exception_handlers(app)
 

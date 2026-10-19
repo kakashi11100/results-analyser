@@ -111,6 +111,7 @@ def me(current_user: User = Depends(get_current_user)) -> User:
     "/change-password",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Change the current user's password and revoke all their sessions.",
+    dependencies=[Depends(rate_limit_login)],
 )
 def change_password(
     payload: ChangePasswordRequest,
